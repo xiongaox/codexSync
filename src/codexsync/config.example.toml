@@ -31,12 +31,28 @@ session_mode = "last_date_only"
 workspace_root_dir = "D:/GDrive/codexSync"
 # Local Codex state directory
 local_state_dir = "C:/Users/USERNAME/.codex"
-# Shared cloud/network directory (example path)
+# Shared cloud/network directory (filesystem backend only; optional for s3 backend)
 cloud_root_dir = "${workspace_root}/sync"
 # Directory for backups created before overwrite
 backup_dir = "${workspace_root}/backups"
 # Temporary directory for atomic operations (tmp + rename)
 temp_dir = "${workspace_root}/.tmp"
+
+[storage]
+# filesystem keeps the existing cloud-folder sync behavior.
+# s3 enables explicit push/pull snapshots to an S3-compatible bucket.
+backend = "filesystem"
+
+[s3]
+# Required only when storage.backend = "s3".
+# For Cloudflare R2, endpoint_url is shown in R2 > S3 API.
+# Credentials must come from the AWS SDK credential chain, never this file.
+# bucket = "codexsync"
+# prefix = "codexsync"
+# endpoint_url = "https://ACCOUNT_ID.r2.cloudflarestorage.com"
+# region = "auto"
+# addressing_style = "path"
+# verify_tls = true
 
 [targets]
 # Relative paths under local_state_dir/cloud_state_dir included in sync
@@ -106,6 +122,8 @@ linux = []
 [state]
 # Internal coordination files between machines
 manifest_file = "${workspace_root}/state/manifest.json"
+# Local baseline used by S3 push/pull to prevent overwriting a newer remote snapshot.
+s3_metadata_file = "${workspace_root}/state/s3-metadata.json"
 #lease_file = "D:/GDrive/codexSync/lease.json"
 #history_dir = "D:/GDrive/codexSync/history"
 # Lease TTL (seconds): once expired, another machine may take over sync

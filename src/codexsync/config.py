@@ -15,7 +15,9 @@ from .models import (
     PathsConfig,
     ProcessDetectionConfig,
     SafetyConfig,
+    S3Config,
     StateConfig,
+    StorageConfig,
     SyncConfig,
     TargetsConfig,
 )
@@ -72,6 +74,8 @@ def load_config(path: Path) -> AppConfig:
     conflict_raw = raw.get("conflict", {})
     state_raw = raw.get("state", {})
     logging_raw = raw.get("logging", {})
+    storage_raw = raw.get("storage", {})
+    s3_raw = raw.get("s3", {})
 
     identity = IdentityConfig(machine_id=identity_raw.get("machine_id"))
 
@@ -86,6 +90,7 @@ def load_config(path: Path) -> AppConfig:
         "paths.cloud_root_dir",
         base_dir=base_dir,
         workspace_root=workspace_root_dir,
+        required=False,
     )
     backup_dir = _to_path(
         paths_raw.get("backup_dir"),
@@ -99,8 +104,8 @@ def load_config(path: Path) -> AppConfig:
         base_dir=base_dir,
         workspace_root=workspace_root_dir,
     )
-    if cloud_root_dir is None or backup_dir is None or temp_dir is None:
-        raise ConfigError("paths.cloud_root_dir, paths.backup_dir and paths.temp_dir are required")
+    if backup_dir is None or temp_dir is None:
+        raise ConfigError("paths.backup_dir and paths.temp_dir are required")
 
     paths = PathsConfig(
         workspace_root_dir=workspace_root_dir,
@@ -168,6 +173,13 @@ def load_config(path: Path) -> AppConfig:
             workspace_root=workspace_root_dir,
             required=False,
         ),
+        s3_metadata_file=_to_path(
+            state_raw.get("s3_metadata_file"),
+            "state.s3_metadata_file",
+            base_dir=base_dir,
+            workspace_root=workspace_root_dir,
+            required=False,
+        ),
         data_version=int(state_raw.get("data_version", 1)),
     )
 
@@ -187,6 +199,15 @@ def load_config(path: Path) -> AppConfig:
         max_file_size_mb=int(logging_raw.get("max_file_size_mb", 10)),
         machine_id=identity.machine_id,
     )
+    storage = StorageConfig(backend=str(storage_raw.get("backend", "filesystem")).strip().lower())
+    s3 = S3Config(
+        bucket=(str(s3_raw.get("bucket")).strip() if s3_raw.get("bucket") else None),
+        prefix=str(s3_raw.get("prefix", "codexsync")).strip().strip("/"),
+        region=(str(s3_raw.get("region")).strip() if s3_raw.get("region") else None),
+        endpoint_url=(str(s3_raw.get("endpoint_url")).strip() if s3_raw.get("endpoint_url") else None),
+        addressing_style=str(s3_raw.get("addressing_style", "auto")).strip().lower(),
+        verify_tls=bool(s3_raw.get("verify_tls", True)),
+    )
 
     cfg = AppConfig(
         identity=identity,
@@ -200,12 +221,25 @@ def load_config(path: Path) -> AppConfig:
         conflict=conflict,
         state=state,
         logging=logging_cfg,
+        storage=storage,
+        s3=s3,
     )
     _validate_config(cfg)
     return cfg
 
 
 def _validate_config(cfg: AppConfig) -> None:
+    if cfg.storage.backend not in {"filesystem", "s3"}:
+        raise ConfigError("storage.backend must be one of: filesystem, s3")
+    if cfg.storage.backend == "s3":
+        if not cfg.s3.bucket:
+            raise ConfigError("s3.bucket is required when storage.backend=s3")
+        if not cfg.s3.prefix:
+            raise ConfigError("s3.prefix must not be empty")
+        if cfg.s3.addressing_style not in {"auto", "path", "virtual"}:
+            raise ConfigError("s3.addressing_style must be one of: auto, path, virtual")
+    if cfg.storage.backend == "filesystem" and cfg.paths.cloud_root_dir is None:
+        raise ConfigError("paths.cloud_root_dir is required when storage.backend=filesystem")
     if cfg.sync.mode != "cold":
         raise ConfigError("Only cold sync mode is supported")
 
@@ -272,7 +306,7 @@ def _validate_config(cfg: AppConfig) -> None:
     if cfg.logging.max_file_size_mb <= 0:
         raise ConfigError("logging.max_file_size_mb must be > 0")
 
-    if cfg.paths.local_state_dir and cfg.paths.local_state_dir == cfg.paths.cloud_root_dir:
+    if cfg.paths.local_state_dir and cfg.paths.cloud_root_dir and cfg.paths.local_state_dir == cfg.paths.cloud_root_dir:
         raise ConfigError("paths.local_state_dir and paths.cloud_root_dir must be different")
 
 

@@ -9,9 +9,12 @@ from .app import (
     collect_process_snapshot,
     print_preflight_report,
     print_plan,
+    pull_s3_snapshot,
+    push_s3_snapshot,
     restore_from_backup,
     run_preflight,
     run_sync,
+    list_s3_snapshots,
     validate_config_only,
 )
 from .config import load_config
@@ -71,6 +74,20 @@ def build_parser() -> argparse.ArgumentParser:
     mode_group.add_argument("--dry-run", action="store_true", help="Force dry-run mode")
     mode_group.add_argument("--apply", action="store_true", help="Apply changes (overrides dry-run)")
 
+    push = sub.add_parser("push", help="Create and upload an immutable S3 snapshot")
+    push_mode = push.add_mutually_exclusive_group()
+    push_mode.add_argument("--dry-run", action="store_true", help="Build snapshot without uploading")
+    push_mode.add_argument("--apply", action="store_true", help="Upload snapshot (default)")
+
+    pull = sub.add_parser("pull", help="Download and restore an S3 snapshot")
+    pull.add_argument("--snapshot", default=None, help="Snapshot ID (defaults to S3 latest)")
+    pull.add_argument("--merge", action="store_true", help="Conservatively merge local state with the snapshot")
+    pull_mode = pull.add_mutually_exclusive_group()
+    pull_mode.add_argument("--dry-run", action="store_true", help="Download and validate without restoring")
+    pull_mode.add_argument("--apply", action="store_true", help="Restore snapshot (default)")
+
+    sub.add_parser("list-snapshots", help="List immutable S3 snapshots")
+
     restore = sub.add_parser("restore", help="Restore files from backup snapshot")
     restore.add_argument("--from", dest="snapshot", default=None, help="Snapshot directory name in backup_dir")
     restore.add_argument(
@@ -95,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         # Logging is configured with defaults first, then with file settings from config when context is built.
         configure_logging(LoggingConfig(level="INFO", file=None), verbose=args.verbose)
         cfg_for_verbose = None
-        if args.command in {"plan", "sync", "restore"}:
+        if args.command in {"plan", "sync", "restore", "push", "pull", "list-snapshots"}:
             try:
                 cfg_for_verbose = load_config(config_path)
                 configure_logging(cfg_for_verbose.logging, verbose=args.verbose)
@@ -150,6 +167,31 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run = False
             run_sync(ctx, dry_run=dry_run)
             print("Sync finished." if not dry_run else "Dry-run finished.")
+            return int(ExitCode.OK)
+
+        if args.command == "push":
+            info = push_s3_snapshot(
+                config_path,
+                dry_run=bool(args.dry_run),
+                manual_terminate_confirmation_override=args.manual_terminate_confirmation_override,
+            )
+            print(f"Push finished. snapshot={info.snapshot_id} files={info.file_count} bytes={info.total_size}")
+            return int(ExitCode.OK)
+
+        if args.command == "pull":
+            info = pull_s3_snapshot(
+                config_path,
+                snapshot_id=args.snapshot,
+                merge=bool(args.merge),
+                dry_run=bool(args.dry_run),
+                manual_terminate_confirmation_override=args.manual_terminate_confirmation_override,
+            )
+            print(f"Pull finished. snapshot={info.snapshot_id} files={info.file_count} bytes={info.total_size}")
+            return int(ExitCode.OK)
+
+        if args.command == "list-snapshots":
+            for item in list_s3_snapshots(config_path):
+                print(f"{item.snapshot_id}\t{item.machine_id}\t{item.created_at}\t{item.file_count}\t{item.total_size}")
             return int(ExitCode.OK)
 
         if args.command == "restore":

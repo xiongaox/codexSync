@@ -127,6 +127,38 @@ class ConfigTests(unittest.TestCase):
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
+    def test_s3_backend_does_not_require_cloud_root_dir(self) -> None:
+        root = Path.cwd() / "test-sandbox" / f"config-s3-{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=False)
+        try:
+            cfg_path = root / "config.toml"
+            cfg_path.write_text(
+                textwrap.dedent(
+                    """
+                    [storage]
+                    backend = "s3"
+
+                    [s3]
+                    bucket = "codexsync"
+                    prefix = "snapshots"
+                    endpoint_url = "https://example.r2.cloudflarestorage.com"
+                    addressing_style = "path"
+
+                    [paths]
+                    local_state_dir = "local"
+                    backup_dir = "backups"
+                    temp_dir = "tmp"
+                    """
+                ).strip()
+                + "\n",
+                encoding="utf-8",
+            )
+            cfg = load_config(cfg_path)
+            self.assertEqual(cfg.storage.backend, "s3")
+            self.assertIsNone(cfg.paths.cloud_root_dir)
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
+
     def test_sync_mode_values_are_normalized_and_validated(self) -> None:
         root = Path.cwd() / "test-sandbox" / f"config-sync-mode-{uuid.uuid4().hex}"
         root.mkdir(parents=True, exist_ok=False)

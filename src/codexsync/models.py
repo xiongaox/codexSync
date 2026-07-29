@@ -8,7 +8,7 @@ from pathlib import Path
 class PathsConfig:
     workspace_root_dir: Path | None
     local_state_dir: Path | None
-    cloud_root_dir: Path
+    cloud_root_dir: Path | None
     backup_dir: Path
     temp_dir: Path
 
@@ -80,6 +80,7 @@ class ConflictConfig:
 @dataclass(slots=True)
 class StateConfig:
     manifest_file: Path | None = None
+    s3_metadata_file: Path | None = None
     data_version: int = 1
 
 
@@ -95,6 +96,21 @@ class LoggingConfig:
 
 
 @dataclass(slots=True)
+class StorageConfig:
+    backend: str = "filesystem"
+
+
+@dataclass(slots=True)
+class S3Config:
+    bucket: str | None = None
+    prefix: str = "codexsync"
+    region: str | None = None
+    endpoint_url: str | None = None
+    addressing_style: str = "auto"
+    verify_tls: bool = True
+
+
+@dataclass(slots=True)
 class AppConfig:
     identity: IdentityConfig
     paths: PathsConfig
@@ -107,6 +123,8 @@ class AppConfig:
     conflict: ConflictConfig
     state: StateConfig
     logging: LoggingConfig
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    s3: S3Config = field(default_factory=S3Config)
 
 
 @dataclass(slots=True, frozen=True)

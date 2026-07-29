@@ -213,6 +213,48 @@ List CLI help:
 python -m codexsync -h
 ```
 
+## S3 / Cloudflare R2 snapshots
+
+Set `storage.backend = "s3"` and configure `[s3]` with a private bucket and S3-compatible endpoint. Credentials are supplied through the AWS SDK credential chain, not `config.toml`.
+
+For Cloudflare R2, use `addressing_style = "path"` and `region = "auto"`:
+
+```toml
+[storage]
+backend = "s3"
+
+[s3]
+bucket = "codexsync"
+prefix = "codexsync"
+endpoint_url = "https://ACCOUNT_ID.r2.cloudflarestorage.com"
+region = "auto"
+addressing_style = "path"
+```
+
+Set the R2 API token values in each machine's environment before running the CLI:
+
+```powershell
+$env:AWS_ACCESS_KEY_ID = "..."
+$env:AWS_SECRET_ACCESS_KEY = "..."
+```
+
+```powershell
+# Source machine: close Codex, then publish an immutable snapshot.
+python -m codexsync -c config.toml push
+
+# Target machine: close Codex, then restore the latest snapshot.
+python -m codexsync -c config.toml pull
+
+# When both machines have new content, conservatively merge first.
+python -m codexsync -c config.toml pull --merge
+
+# Inspect or restore a historical snapshot.
+python -m codexsync -c config.toml list-snapshots
+python -m codexsync -c config.toml pull --snapshot <snapshot-id>
+```
+
+`push` publishes a ZIP plus a SHA-256 manifest before updating the remote `latest` pointer. `pull` verifies both before any local write and always creates the configured local backup before overwriting. A push from an out-of-date machine is rejected; run `pull` or `pull --merge` first.
+
 Process termination behavior:
 
 - On Windows, if Codex is still running during `sync`/`restore`, codexSync can terminate Codex processes before continuing.

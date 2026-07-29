@@ -26,7 +26,7 @@ classifiers = [
   "Topic :: Software Development :: Version Control",
   "Topic :: Utilities",
 ]
-dependencies = []
+dependencies = ["boto3>=1.34"]
 
 [project.urls]
 Homepage = "https://github.com/kroxiksut/codexSync"

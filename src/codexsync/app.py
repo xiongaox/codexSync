@@ -24,6 +24,7 @@ from .process_detector import CodexProcessDetector, ProcessInfo
 from .scanner import scan_tree
 from .state_locator import detect_local_state_dir, resolve_state_dirs
 from .sync_engine import SyncEngine
+from .s3_snapshot import S3SnapshotService, SnapshotInfo
 
 LOG = logging.getLogger(__name__)
 
@@ -207,9 +208,47 @@ def validate_config_only(config_path: Path) -> None:
     try:
         cfg = load_config(config_path)
         initialize_runtime_paths(cfg)
-        _ = resolve_state_dirs(cfg.paths.local_state_dir, cfg.paths.cloud_root_dir)
+        if cfg.storage.backend == "s3":
+            _ = detect_local_state_dir(cfg.paths.local_state_dir)
+        else:
+            if cfg.paths.cloud_root_dir is None:
+                raise ConfigError("paths.cloud_root_dir is required for filesystem sync")
+            _ = resolve_state_dirs(cfg.paths.local_state_dir, cfg.paths.cloud_root_dir)
     except ConfigError:
         raise
+
+
+def push_s3_snapshot(
+    config_path: Path,
+    dry_run: bool,
+    manual_terminate_confirmation_override: bool | None = None,
+) -> SnapshotInfo:
+    cfg = load_config(config_path)
+    initialize_runtime_paths(cfg)
+    local_dir = detect_local_state_dir(cfg.paths.local_state_dir)
+    _enforce_safety_preconditions(cfg, manual_terminate_confirmation_override)
+    return S3SnapshotService(cfg, local_dir).push(dry_run=dry_run)
+
+
+def pull_s3_snapshot(
+    config_path: Path,
+    snapshot_id: str | None,
+    merge: bool,
+    dry_run: bool,
+    manual_terminate_confirmation_override: bool | None = None,
+) -> SnapshotInfo:
+    cfg = load_config(config_path)
+    initialize_runtime_paths(cfg)
+    local_dir = detect_local_state_dir(cfg.paths.local_state_dir)
+    _enforce_safety_preconditions(cfg, manual_terminate_confirmation_override)
+    return S3SnapshotService(cfg, local_dir).pull(snapshot_id=snapshot_id, merge=merge, dry_run=dry_run)
+
+
+def list_s3_snapshots(config_path: Path) -> list[SnapshotInfo]:
+    cfg = load_config(config_path)
+    initialize_runtime_paths(cfg)
+    local_dir = detect_local_state_dir(cfg.paths.local_state_dir)
+    return S3SnapshotService(cfg, local_dir).list_snapshots()
 
 
 def run_preflight(config_path: Path) -> PreflightReport:
@@ -232,8 +271,19 @@ def run_preflight(config_path: Path) -> PreflightReport:
     local_dir: Path | None = None
     cloud_dir: Path | None = None
     try:
-        local_dir, cloud_dir = resolve_state_dirs(cfg.paths.local_state_dir, cfg.paths.cloud_root_dir)
-        checks.append(PreflightCheckResult("state_dirs", "PASS", f"local={local_dir}; cloud={cloud_dir}"))
+        if cfg.storage.backend == "s3":
+            local_dir = detect_local_state_dir(cfg.paths.local_state_dir)
+            checks.append(PreflightCheckResult("state_dirs", "PASS", f"local={local_dir}; storage=s3"))
+            try:
+                S3SnapshotService(cfg, local_dir).check_connection()
+                checks.append(PreflightCheckResult("s3", "PASS", "S3 bucket is reachable"))
+            except Exception as exc:
+                checks.append(PreflightCheckResult("s3", "FAIL", f"S3 check failed: {exc}"))
+        else:
+            if cfg.paths.cloud_root_dir is None:
+                raise ConfigError("paths.cloud_root_dir is required for filesystem sync")
+            local_dir, cloud_dir = resolve_state_dirs(cfg.paths.local_state_dir, cfg.paths.cloud_root_dir)
+            checks.append(PreflightCheckResult("state_dirs", "PASS", f"local={local_dir}; cloud={cloud_dir}"))
     except Exception as exc:
         checks.append(PreflightCheckResult("state_dirs", "FAIL", f"State directories are not ready: {exc}"))
 
@@ -274,10 +324,12 @@ def initialize_runtime_paths(cfg: AppConfig) -> None:
     Prepares runtime directories/files for first run.
     Creates only codexSync-owned infrastructure and never creates local Codex state dir.
     """
-    _ensure_dir(cfg.paths.cloud_root_dir, "paths.cloud_root_dir")
+    if cfg.paths.cloud_root_dir is not None:
+        _ensure_dir(cfg.paths.cloud_root_dir, "paths.cloud_root_dir")
     _ensure_dir(cfg.paths.backup_dir, "paths.backup_dir")
     _ensure_dir(cfg.paths.temp_dir, "paths.temp_dir")
-    _bootstrap_cloud_targets(cfg)
+    if cfg.storage.backend == "filesystem":
+        _bootstrap_cloud_targets(cfg)
 
     if cfg.logging.file:
         _ensure_dir(cfg.logging.file.parent, "logging.file parent")
@@ -505,6 +557,8 @@ def _ensure_dir(path: Path, field_name: str) -> None:
 
 
 def _bootstrap_cloud_targets(cfg: AppConfig) -> None:
+    if cfg.paths.cloud_root_dir is None:
+        raise ConfigError("paths.cloud_root_dir is required for filesystem sync")
     root = cfg.paths.cloud_root_dir.resolve()
     for rel in cfg.targets.include_roots:
         candidate = (root / rel).resolve()
@@ -524,6 +578,8 @@ def _resolve_restore_target(cfg: AppConfig, target: str) -> Path:
     if target == "local":
         return detect_local_state_dir(cfg.paths.local_state_dir)
     if target == "cloud":
+        if cfg.paths.cloud_root_dir is None:
+            raise ConfigError("restore --target cloud is unavailable when storage.backend=s3")
         return cfg.paths.cloud_root_dir
     raise ConfigError(f"Unsupported restore target: {target}")
 
