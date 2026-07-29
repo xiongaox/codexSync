@@ -1,223 +1,59 @@
 # codexSync
 
-Open-source utility for syncing local Codex state between personal machines using a cloud-synced folder.
+在两台个人电脑之间安全交接 Codex 本地状态的命令行工具。支持两种存储方式：传统的本地云盘目录同步，以及 AWS S3 / Cloudflare R2 的不可变快照。
 
 > [!IMPORTANT]
-> Current real-world validation is Windows-to-Windows only.
-> macOS support exists in code/CI, but end-to-end handoff on real macOS machines is not yet validated.
+> 这是冷同步工具：执行 `push`、`pull`、`sync` 或 `restore` 前必须完全关闭 Codex。当前真实环境主要验证 Windows 到 Windows；macOS（Apple Silicon）已有代码与 CI 覆盖，但尚缺少完整的真实双机验收。
 
-## Why
+## 它解决什么问题
 
-Developers may want to continue working with Codex on another machine without losing local session state.
+- 在另一台电脑继续使用已有的 Codex 会话、Skills 和 Plugins。
+- 覆盖前创建备份，避免直接破坏原有状态。
+- 对两端同时修改的内容停止并报告冲突，而不是静默覆盖。
 
-## What this does
+## 不做什么
 
-* Syncs local Codex state directory
-* Works only after Codex process is closed
-* Uses any cloud-synced folder (Dropbox, OneDrive, Syncthing, etc.)
+- 不调用或修改 Codex API、二进制文件与运行时。
+- 不迁移登录令牌、Cookies、`.env`、私钥或浏览器会话。
+- 不检查云盘客户端状态、S3/R2 费用或剩余空间。
+- 不提供实时同步；一次只有一台机器应处于活跃工作状态。
 
-## What this does NOT do
+## 推荐方式：S3 / Cloudflare R2 快照
 
-* No integration with Codex internals
-* No API usage
-* No token extraction
-* No network interception
-* No real-time sync
-* No checks for cloud client process/health
-* No checks for free space in cloud/network storage
+这是最简单的日常交接方式：源电脑发布一个不可变快照，目标电脑恢复最新快照。
 
-## Design principles
-
-* Simple and predictable
-* Safe (no corruption)
-* Offline-friendly
-* Backup-first
-* Windows-first
-
-## How it works (MVP)
-
-1. Detect if Codex is running
-2. If not running:
-
-   * Compare local and cloud state
-   * Sync newer files
-   * Create backup before overwrite
-
-## Conflict policy
-
-`conflict.policy` supports:
-
-- `manual_abort`: report conflict and stop (default)
-- `prefer_cloud`: auto-resolve conflict by taking cloud version
-- `prefer_local`: auto-resolve conflict by taking local version
-- `prefer_newer_mtime`: auto-resolve conflict by taking side with newer mtime
-
-## Sync options
-
-`sync.compare` controls file comparison strategy:
-
-- `mtime` (default): compare by `size + mtime`
-- `mtime_hash_fallback`: fast `size + mtime` path, but when values are equal/close (within tolerance), compare file content hash (SHA-256)
-
-`sync.equal_mtime_action` controls behavior when file mtimes are equal (within `sync.time_tolerance_seconds`) but files differ:
-
-- `skip`: do not copy (default)
-- `prefer_local`: copy local version to cloud
-- `prefer_cloud`: copy cloud version to local
-- `manual_abort`: mark as conflict and stop in `manual_abort` conflict mode
-
-`sync.session_mode` controls scope of `sessions` sync:
-
-- `all`: sync all `sessions` content (default behavior)
-- `last_date_only`: sync only the latest date-based folder under `sessions`
-  - supported layouts: `sessions/YYYY-MM-DD/...` and `sessions/YYYY/MM/DD/...`
-  - if no date-based layout is detected, codexSync logs a warning and syncs all `sessions` files
-
-## Backups
-
-- `backup.compression` supports:
-  - `none` (default): backup snapshot is stored as directory tree
-  - `zip`: backup snapshot is stored as a single `.zip` file
-- `restore` supports both snapshot formats and auto-selects the latest by mtime if `--from` is omitted.
-
-## Logging
-
-- Levels: `DEBUG|INFO|WARNING|ERROR`
-- Formats (configurable): `text|json|logfmt`
-- Rotation/size/retention/archive rules apply equally to all formats (`text`, `json`, `logfmt`)
-- UTF-8 for all log files
-- Daily log files with machine id (`<stem>-<machine>-YYYY-MM-DD[.N].log`)
-- Daily/time rotation + size rotation (`logging.max_file_size_mb`, default `10`)
-- Retention cleanup (`logging.retention_days`, default `7`)
-- Old log storage mode (`logging.archive_mode`):
-  - `zip` (default): archive rotated/old logs into `.zip`
-  - `text`: keep rotated logs as plain text files
-
-## Platform and CI
-
-- Runtime support is currently Windows-first.
-- macOS support is allowed in current project scope (Apple Silicon target).
-- Linux runtime support is intentionally out of MVP scope for now.
-- CI currently runs on:
-  - `windows-latest`
-  - `macos-latest`
-
-## CLI commands
-
-Run from project root:
-
-```powershell
-python -m codexsync -c config.toml <command>
+```text
+源电脑：关闭 Codex → cs push
+目标电脑：关闭 Codex → cs pull → 打开 Codex
+两端都有新内容：关闭 Codex → cs pull --merge → 处理冲突 → cs push
 ```
 
-Generate `config.toml` from bundled template:
+### 一次性安装
 
 ```powershell
-python -m codexsync init-config
+python -m pip install -e .
 ```
 
-Generate to a custom location:
+安装后可使用短命令 `cs`。不使用短命令时，`codexsync` 与 `python -m codexsync` 也等价。
+
+### 创建配置
 
 ```powershell
-python -m codexsync init-config --output D:\codexSync\config.toml
+cs init-config
 ```
 
-Overwrite existing config file:
+默认配置文件为：
 
-```powershell
-python -m codexsync init-config --output D:\codexSync\config.toml --force
+```text
+Windows: %USERPROFILE%\.codexsync\config.toml
+macOS:   ~/.codexsync/config.toml
 ```
 
-Validation:
+程序会优先读取当前目录的 `config.toml`；不存在时自动读取上述默认路径。仍可用 `-c <路径>` 指定其他配置文件。
 
-```powershell
-python -m codexsync -c config.toml validate
-```
+### 配置 Cloudflare R2
 
-Preflight diagnostics (same behavior for `doctor` and `preflight`):
-
-```powershell
-python -m codexsync -c config.toml doctor
-python -m codexsync -c config.toml preflight
-```
-
-Build sync plan (no changes):
-
-```powershell
-python -m codexsync -c config.toml plan
-```
-
-Build plan with process snapshot (`--verbose`):
-
-```powershell
-python -m codexsync -c config.toml -v plan
-```
-
-Sync simulation (safe test):
-
-```powershell
-python -m codexsync -c config.toml sync --dry-run
-```
-
-Sync simulation with process snapshot (`--verbose`):
-
-```powershell
-python -m codexsync -c config.toml -v sync --dry-run
-```
-
-Real sync (writes files):
-
-```powershell
-python -m codexsync -c config.toml sync --apply
-```
-
-Typical handoff to another machine:
-
-```powershell
-python -m codexsync -c config.toml sync --apply
-```
-
-Restore from latest backup snapshot to local state:
-
-```powershell
-python -m codexsync -c config.toml restore --apply
-```
-
-Restore from specific backup snapshot:
-
-```powershell
-python -m codexsync -c config.toml restore --from <snapshot_dir_name> --apply
-```
-
-Restore from specific zip snapshot:
-
-```powershell
-python -m codexsync -c config.toml restore --from <snapshot_name.zip> --apply
-```
-
-Restore to cloud target instead of local:
-
-```powershell
-python -m codexsync -c config.toml restore --target cloud --apply
-```
-
-Preview restore without writing:
-
-```powershell
-python -m codexsync -c config.toml restore --dry-run
-```
-
-List CLI help:
-
-```powershell
-python -m codexsync -h
-```
-
-## S3 / Cloudflare R2 snapshots
-
-Set `storage.backend = "s3"` and configure `[s3]` with a private bucket and S3-compatible endpoint. Credentials are supplied through the AWS SDK credential chain, not `config.toml`.
-
-For Cloudflare R2, use `addressing_style = "path"` and `region = "auto"`:
+在 `config.toml` 中填写（不要把 Access Key 或 Secret 写进此文件）：
 
 ```toml
 [storage]
@@ -231,173 +67,151 @@ region = "auto"
 addressing_style = "path"
 ```
 
-Set the R2 API token values in each machine's environment before running the CLI:
+`endpoint_url` 在 Cloudflare R2 控制台的 **S3 API** 区域获取。R2 API Token 只需授予目标 bucket 的“对象读和写”权限。
+
+凭证由 AWS SDK 标准凭证链提供，不进入 `config.toml`。例如当前 CMD 会话可设置：
+
+```cmd
+set "AWS_ACCESS_KEY_ID=你的AccessKeyID"
+set "AWS_SECRET_ACCESS_KEY=你的SecretAccessKey"
+set "AWS_DEFAULT_REGION=auto"
+```
+
+不要向聊天、日志、截图或 Git 仓库发送 Secret Access Key。
+
+### 常用命令
 
 ```powershell
-$env:AWS_ACCESS_KEY_ID = "..."
-$env:AWS_SECRET_ACCESS_KEY = "..."
+# 检查配置、S3 访问、文件写入权限和 Codex 进程状态
+cs doctor
+
+# 源电脑：创建 ZIP + SHA-256 manifest 并上传到 S3/R2
+cs push
+
+# 目标电脑：下载、校验并恢复最新快照；本地覆盖前自动备份
+cs pull
+
+# 两台机器都有新增内容时进行保守合并
+cs pull --merge
+
+# 查看历史快照，或恢复指定快照
+cs list-snapshots
+cs pull --snapshot <snapshot-id>
 ```
+
+每次 `push` 都会创建新的不可变快照；上传 ZIP 和 manifest 校验通过后才更新远端 `latest` 指针。若远端快照比本机基线更新，`push` 会拒绝执行并要求先 `pull` 或 `pull --merge`。
+
+`pull --merge` 会：
+
+- 合并不同路径的文件；
+- 对 `session_index.jsonl` 按完整行去重；
+- 对同路径但内容不同的会话、Skill 或 Plugin 报告冲突并停止，不自动选择一方。
+
+## 传统云盘目录同步
+
+如果使用 OneDrive、Dropbox、Syncthing 或本地网络共享目录，可保持：
+
+```toml
+[storage]
+backend = "filesystem"
+```
+
+然后执行：
 
 ```powershell
-# Source machine: close Codex, then publish an immutable snapshot.
-python -m codexsync -c config.toml push
-
-# Target machine: close Codex, then restore the latest snapshot.
-python -m codexsync -c config.toml pull
-
-# When both machines have new content, conservatively merge first.
-python -m codexsync -c config.toml pull --merge
-
-# Inspect or restore a historical snapshot.
-python -m codexsync -c config.toml list-snapshots
-python -m codexsync -c config.toml pull --snapshot <snapshot-id>
+cs doctor
+cs plan
+cs sync --dry-run
+cs sync --apply
 ```
 
-`push` publishes a ZIP plus a SHA-256 manifest before updating the remote `latest` pointer. `pull` verifies both before any local write and always creates the configured local backup before overwriting. A push from an out-of-date machine is rejected; run `pull` or `pull --merge` first.
+传统模式通过 `paths.cloud_root_dir` 指定云盘同步目录，执行双向文件比较与同步。严格交接顺序是：关闭机器 A 的 Codex → 等云盘传播完成 → 在机器 B 关闭 Codex 后运行同步 → 同步完成才打开 Codex。
 
-## Quick daily workflow
+## 同步范围与排除规则
 
-Install once with `python -m pip install -e .`, then use the short `cs` command. `cs init-config` writes the default config to `~/.codexsync/config.toml`; every command automatically uses `./config.toml` when present, otherwise that user config file. `-c <path>` remains available for alternate configurations.
+默认同步根目录：
 
-```text
-Source machine: close Codex -> cs push
-Target machine: close Codex -> cs pull -> open Codex
-Both machines changed: close Codex -> cs pull --merge -> resolve conflicts -> cs push
+```toml
+[targets]
+include_roots = [
+  "sessions",
+  "session_index.jsonl",
+  "skills",
+  "plugins",
+]
 ```
 
-Process termination behavior:
+默认排除锁、临时文件、缓存、`__pycache__` 和日志。可在 `[filters] exclude_globs` 中调整。认证和敏感信息不应加入同步范围。
 
-- On Windows, if Codex is still running during `sync`/`restore`, codexSync can terminate Codex processes before continuing.
-- By default, manual GUI confirmation is enabled (`process_detection.manual_terminate_confirmation = true`).
-- Background process tracking is configured by OS in `process_detection.background_process_names`:
-  - `windows = ["codex-windows-sandbox"]`
-  - `macos = []`
-  - `linux = []`
-- Confirmation channel is configured by `process_detection.terminate_confirmation_mode = "gui" | "console"` (default: `gui`).
-- All confirmation prompts are in English in both GUI and console modes.
-- If `codex-windows-sandbox` is detected, codexSync reports that Codex is still running and exits with code `3` (no auto-terminate).
-- If `codex.exe` is running but `codex-windows-sandbox` is not detected, codexSync asks whether to terminate Codex and continue.
-- You can force manual confirmation from CLI:
+`sync.session_mode = "last_date_only"` 时，只同步 `sessions` 下最新的日期目录；无法识别日期目录时会回退为同步全部 session。
+
+## 备份、恢复与冲突
+
+- 覆盖任何已有目标文件前，都会按 `[backup]` 创建备份。
+- `backup.compression = "none"` 保存目录快照；`"zip"` 保存 ZIP 快照。
+- 本地备份恢复：
 
 ```powershell
-python -m codexsync -c config.toml --manual-terminate-confirmation sync --apply
+cs restore --apply
+cs restore --from <snapshot-name> --apply
 ```
 
-- You can force auto-terminate without manual confirmation for the current run only:
+- 传统目录同步的 `conflict.policy`：
+  - `manual_abort`：报告冲突并停止（默认）；
+  - `prefer_cloud`：选择云端；
+  - `prefer_local`：选择本地；
+  - `prefer_newer_mtime`：选择修改时间较新的一方。
+
+## 进程与安全策略
+
+Windows 上检测到 `codex-windows-sandbox` 时，工具会直接停止；检测到仅有 `codex.exe` 时，默认要求用户确认后才会尝试关闭它。可以使用：
 
 ```powershell
-python -m codexsync -c config.toml --auto-terminate-without-confirmation sync --apply
+cs --manual-terminate-confirmation sync --apply
+cs --auto-terminate-without-confirmation sync --apply
 ```
 
-- On macOS/Linux, previous behavior is kept: running Codex process fails safety precondition.
-- `--verbose` works for `plan`, `sync --dry-run`, `sync --apply`, `restore --dry-run`, and `restore --apply`; it logs tracked processes with PID/name.
-- In verbose mode on Windows, codexSync logs only:
-  - whether `codex.exe` is running,
-  - whether `codex-windows-sandbox` is detected,
-  - subprocesses under `codex.exe` (PID/name/cmd).
+macOS 上只要检测到 Codex 正在运行，就会停止操作。所有不确定状态均应以安全失败处理。
 
-Termination-related exit codes for automation:
+## 退出码
 
-- `3` Codex is running / sandbox detected / user rejected termination
-- `5` termination was approved but failed before timeout (fail-safe)
+| 退出码 | 含义 |
+| --- | --- |
+| `0` | 成功或无变更 |
+| `1` | 运行时错误 |
+| `2` | 检测到需手动处理的冲突 |
+| `3` | Codex 仍在运行 |
+| `4` | 配置或命令参数错误 |
+| `5` | 安全中止 |
 
-## CLI exit codes
+`doctor` / `preflight` 在所有检查通过或仅有警告时返回 `0`；有失败项时返回 `5`。
 
-- `0` success
-- `1` runtime error
-- `2` conflict detected (manual resolution required)
-- `3` Codex is running (cold sync precondition failed)
-- `4` invalid config or CLI arguments
-- `5` safe abort (`fail-safe`)
+## 日志与平台
 
-`doctor`/`preflight` return:
+- 日志等级：`DEBUG`、`INFO`、`WARNING`、`ERROR`。
+- 日志格式：`text`、`json`、`logfmt`，支持按日期和大小滚动、保留与压缩归档。
+- 当前 CI：`windows-latest`、`macos-latest`；Linux 运行时暂不在 MVP 范围内。
 
-- `0` when all checks passed or warnings only
-- `5` when at least one preflight check failed
+## 定时任务模板
 
-## Required operation protocol
+仓库提供可编辑模板：
 
-This tool assumes a strict handoff flow between machines:
+- Windows Task Scheduler：[scripts/scheduler/windows/README.MD](./scripts/scheduler/windows/README.MD)
+- macOS LaunchAgent：[scripts/scheduler/macos/README.MD](./scripts/scheduler/macos/README.MD)
 
-1. Close Codex on machine A.
-2. Wait until cloud sync fully propagates machine A changes.
-3. Run codexSync on machine B.
-4. Start Codex on machine B only after sync completes.
-5. Sign in to Codex again on machine B after file sync.
+定时任务不会绕过冷同步要求。验证阶段始终先使用 dry-run。
 
-Important: per OpenAI licensing constraints, authentication tokens are not transferred by codexSync.
-
-The project intentionally does not verify cloud-provider sync status, cloud client process state, or free space on cloud/network storage. These are user responsibilities.
-
-## Scheduler setup scripts
-
-This repository includes editable scheduler setup templates:
-
-- Windows Task Scheduler:
-  - `scripts/scheduler/windows/task.config.ps1`
-  - `scripts/scheduler/windows/install-task.ps1`
-  - `scripts/scheduler/windows/remove-task.ps1`
-  - detailed guide: [scripts/scheduler/windows/README.MD](./scripts/scheduler/windows/README.MD)
-- macOS launchd (LaunchAgent):
-  - `scripts/scheduler/macos/launchd.config.sh`
-  - `scripts/scheduler/macos/install-launchd.sh`
-  - `scripts/scheduler/macos/uninstall-launchd.sh`
-  - detailed guide: [scripts/scheduler/macos/README.MD](./scripts/scheduler/macos/README.MD)
-
-Windows install:
+## 开发
 
 ```powershell
-cd scripts/scheduler/windows
-# 1) Edit task.config.ps1
-.\install-task.ps1
+python -m unittest discover -s tests -v
 ```
 
-Windows remove:
+## 许可证
 
-```powershell
-cd scripts/scheduler/windows
-.\remove-task.ps1
-```
+本项目采用双重许可：
 
-macOS install:
+- 开源：`GPL-3.0-or-later`，见 [LICENSE](./LICENSE)
+- 商业许可：见 [COMMERCIAL_LICENSE.MD](./COMMERCIAL_LICENSE.MD)
 
-```bash
-cd scripts/scheduler/macos
-# 1) Edit launchd.config.sh
-chmod +x install-launchd.sh uninstall-launchd.sh run-codexsync.sh
-./install-launchd.sh
-```
-
-macOS remove:
-
-```bash
-cd scripts/scheduler/macos
-./uninstall-launchd.sh
-```
-
-Important:
-
-- These scripts only register scheduled jobs, not OS services.
-- Keep `MODE="dry-run"` while validating behavior; switch to `apply` only when ready.
-- Cold sync protocol still applies: codexSync must run only when Codex is not running.
-
-## Status
-
-MVP (ready for public repository and community testing)
-
-## Publishing
-
-See release checklist: [docs/PUBLISHING.MD](./docs/PUBLISHING.MD)
-Release notes: [CHANGELOG.MD](./CHANGELOG.MD)
-
-## Licensing
-
-This project uses dual licensing:
-
-- Open-source license: `GPL-3.0-or-later` (see [LICENSE](./LICENSE))
-- Commercial licensing path: see [COMMERCIAL_LICENSE.MD](./COMMERCIAL_LICENSE.MD)
-
-Contributions are accepted under project contribution terms in:
-
-- [CONTRIBUTING.MD](./CONTRIBUTING.MD)
-- [CLA.MD](./CLA.MD)
+贡献条款见 [CONTRIBUTING.MD](./CONTRIBUTING.MD) 与 [CLA.MD](./CLA.MD)。发布清单见 [docs/PUBLISHING.MD](./docs/PUBLISHING.MD)。
