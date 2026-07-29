@@ -4,8 +4,9 @@ from pathlib import Path
 import shutil
 import unittest
 import uuid
+from unittest.mock import patch
 
-from codexsync.cli import main
+from codexsync.cli import _resolve_config_path, main
 
 
 class CliInitConfigTests(unittest.TestCase):
@@ -46,6 +47,36 @@ class CliInitConfigTests(unittest.TestCase):
             self.assertIn("[sync]", text)
             self.assertNotEqual(text, "old")
         finally:
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_config_resolution_prefers_current_directory_config(self) -> None:
+        root = Path.cwd() / "test-sandbox" / f"config-resolution-{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=True)
+        previous = Path.cwd()
+        try:
+            expected = root / "config.toml"
+            expected.write_text("", encoding="utf-8")
+            import os
+            os.chdir(root)
+            self.assertEqual(_resolve_config_path(None), expected)
+        finally:
+            import os
+            os.chdir(previous)
+            shutil.rmtree(root, ignore_errors=True)
+
+    def test_config_resolution_falls_back_to_user_config(self) -> None:
+        root = Path.cwd() / "test-sandbox" / f"config-no-local-{uuid.uuid4().hex}"
+        home = Path.cwd() / "test-sandbox" / f"config-home-{uuid.uuid4().hex}"
+        root.mkdir(parents=True, exist_ok=True)
+        previous = Path.cwd()
+        try:
+            import os
+            os.chdir(root)
+            with patch("codexsync.cli.Path.home", return_value=home):
+                self.assertEqual(_resolve_config_path(None), home / ".codexsync" / "config.toml")
+        finally:
+            import os
+            os.chdir(previous)
             shutil.rmtree(root, ignore_errors=True)
 
 

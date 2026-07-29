@@ -35,6 +35,7 @@ Issues = "https://github.com/kroxiksut/codexSync/issues"
 
 [project.scripts]
 codexsync = "codexsync.cli:main"
+cs = "codexsync.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

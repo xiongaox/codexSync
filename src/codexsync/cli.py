@@ -28,7 +28,12 @@ LOG = logging.getLogger(__name__)
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="codexsync", description="codexSync CLI")
-    parser.add_argument("-c", "--config", default="config.toml", help="Path to TOML config")
+    parser.add_argument(
+        "-c",
+        "--config",
+        default=None,
+        help="Path to TOML config (defaults to ./config.toml or ~/.codexsync/config.toml)",
+    )
     parser.add_argument(
         "-v",
         "--verbose",
@@ -60,8 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     init_cfg = sub.add_parser("init-config", help="Write example config.toml file")
     init_cfg.add_argument(
         "--output",
-        default="config.toml",
-        help="Output path for generated config file",
+        default=str(_user_config_path()),
+        help="Output path for generated config file (defaults to ~/.codexsync/config.toml)",
     )
     init_cfg.add_argument(
         "--force",
@@ -107,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    config_path = Path(args.config).expanduser()
+    config_path = _resolve_config_path(args.config)
     try:
         # Logging is configured with defaults first, then with file settings from config when context is built.
         configure_logging(LoggingConfig(level="INFO", file=None), verbose=args.verbose)
@@ -244,6 +249,19 @@ def init_config_template(output_path: Path, force: bool) -> Path:
     template = template_path.read_text(encoding="utf-8")
     output_path.write_text(template, encoding="utf-8")
     return output_path.resolve()
+
+
+def _user_config_path() -> Path:
+    return Path.home() / ".codexsync" / "config.toml"
+
+
+def _resolve_config_path(raw_path: str | None) -> Path:
+    if raw_path:
+        return Path(raw_path).expanduser()
+    project_config = Path.cwd() / "config.toml"
+    if project_config.exists():
+        return project_config
+    return _user_config_path()
 
 
 def _emit_verbose_process_snapshot(verbose: bool, cfg: AppConfig) -> None:

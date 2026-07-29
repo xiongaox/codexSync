@@ -255,6 +255,16 @@ python -m codexsync -c config.toml pull --snapshot <snapshot-id>
 
 `push` publishes a ZIP plus a SHA-256 manifest before updating the remote `latest` pointer. `pull` verifies both before any local write and always creates the configured local backup before overwriting. A push from an out-of-date machine is rejected; run `pull` or `pull --merge` first.
 
+## Quick daily workflow
+
+Install once with `python -m pip install -e .`, then use the short `cs` command. `cs init-config` writes the default config to `~/.codexsync/config.toml`; every command automatically uses `./config.toml` when present, otherwise that user config file. `-c <path>` remains available for alternate configurations.
+
+```text
+Source machine: close Codex -> cs push
+Target machine: close Codex -> cs pull -> open Codex
+Both machines changed: close Codex -> cs pull --merge -> resolve conflicts -> cs push
+```
+
 Process termination behavior:
 
 - On Windows, if Codex is still running during `sync`/`restore`, codexSync can terminate Codex processes before continuing.
